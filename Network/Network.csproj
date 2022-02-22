@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="ENet.Managed" Version="4.2.6" />
+    <PackageReference Include="Hangfire.Core" Version="1.7.28" />
     <PackageReference Include="MySql.Data" Version="8.0.22" />
   </ItemGroup>
 

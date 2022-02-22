@@ -69,7 +69,7 @@ namespace PrisonClient
             serviceListBox.Dispatcher.Invoke(() => { serviceListBox.ItemsSource = source; });
             Log.OnLog += OnLogMessage;
             client.ID.Name = System.Net.Dns.GetHostName() + "/" + Environment.UserName;
-            client.ID.Type = ClientType.Client;
+            
             client.OnConnect += Connected;
             client.OnDisconnect += Disconnected;
             client.OnReceive += Receive;
@@ -97,6 +97,7 @@ namespace PrisonClient
                 };
                 logListBox.Items.Add(item);
                 logListBox.ScrollIntoView(item);
+
             }));
         private void Receive(int Channel, NetworkPayload Packet, ENetPeer Sender)
         {

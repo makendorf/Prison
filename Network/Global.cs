@@ -29,7 +29,8 @@ namespace Network
             Shop17,
             Shop18,
             Shop19,
-            Shop20
+            Shop20,
+            Shop21
         }
         public static string GetGUID(Shop shop)
         {
@@ -75,6 +76,8 @@ namespace Network
                     return "ac0fb039-aa25-4279-a578-e438d57118e1";
                 case Shop.Shop20:
                     return "fdeec569-ae49-4cfe-a589-59f3be5e825e";
+                case Shop.Shop21:
+                    return "5095d236-c2e9-42de-b7cd-5574a2355fdc";
             }
             return String.Empty;
         }

@@ -1,14 +1,72 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Configuration;
-using System.Diagnostics.Contracts;
-using System.Diagnostics.Tracing;
+﻿using Hangfire.Annotations;
+using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization.Formatters.Binary;
-using System.Text;
 
 namespace Network
 {
+    [Serializable]
+    public class ServiceConfig
+    {
+        public string IP { get; set; }
+        public int Port { get; set; }
+
+        public ServiceConfig()
+        {
+            IP = "127.0.0.1";
+            Port = 2307;
+        }
+    }
+    [Serializable]
+    public class UserList : INotifyPropertyChanged
+    {
+        private string password { get; set; }
+        private string name { get; set; }
+        private string displayName { get; set; }
+        public string Password
+        {
+            get => password;
+            set
+            {
+                if (value == password) return;
+                password = value;
+                OnPropertyChanged();
+            }
+        }
+        public string Name
+        {
+            get => name;
+            set
+            {
+                if (value == name) return;
+                name = value;
+                OnPropertyChanged();
+            }
+        }
+        public string DisplayName
+        {
+            get => displayName;
+            set
+            {
+                if (value == displayName) return;
+                displayName = value;
+                OnPropertyChanged();
+            }
+        }
+        public override string ToString()
+        {
+            return Name;
+        }
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        [NotifyPropertyChangedInvocator]
+        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
 
     public enum PacketType
     {
@@ -19,11 +77,14 @@ namespace Network
         ServiceStop,
         ServiceStart,
         ServiceListRequest,
-        ServiceListGet,
-        ServiceAutoStart,
-        ConnectionList,
         ShopConnectionList,
-        Message
+        RequestUserList,
+        RequestAutorization,
+        ChangeClientIDServiceList,
+        ChangeServiceAutoStart,
+        StartService,
+        StopService,
+        RestartService
     }
     [Serializable]
     public struct NetworkPayload
@@ -44,6 +105,13 @@ namespace Network
         {
             Type = type;
             Data = data;
+            Sender = "";
+            Receiver = "";
+        }
+        public NetworkPayload(PacketType type)
+        {
+            Type = type;
+            Data = new byte[0];
             Sender = "";
             Receiver = "";
         }

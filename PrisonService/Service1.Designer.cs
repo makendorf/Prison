@@ -1,5 +1,4 @@
-﻿
-namespace PrisonService
+﻿namespace PrisonService
 {
     partial class Service1
     {

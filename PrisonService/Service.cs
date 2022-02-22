@@ -8,6 +8,8 @@ using System.Data;
 using Network;
 using System.IO;
 using System.Management;
+using Newtonsoft.Json;
+using System.Diagnostics;
 
 namespace PrisonService
 {
@@ -29,22 +31,28 @@ namespace PrisonService
         public Service(ServiceInfo info)
         {
             Info = info;
-            SC = new ServiceController(info.Name);
+            SC = new ServiceController(Info.Name);
             StatusCheckTimer = new Timer();
             StatusCheckTimer.Elapsed += CheckStatus;
-            StatusCheckTimer.Interval = 100;//info.CheckInterval;
+            StatusCheckTimer.Interval = info.CheckInterval;//info.CheckInterval;
             StatusCheckTimer.Enabled = true;
             OnStatusChanged += Service_OnStatusChanged;
         }
 
         private void Service_OnStatusChanged(ServiceInfo Info)
         {
-            if (Info.Status == Network.ServiceControllerStatus.Stopped)
+            if (Info.AutoStart)
             {
-                Start();
+                if (Info.Status == Network.ServiceControllerStatus.Stopped)
+                {
+                    Start();
+                }
             }
         }
-
+        public void CheckOff()
+        {
+            StatusCheckTimer.Stop();
+        }
         public System.ServiceProcess.ServiceControllerStatus GetControllerStatus()
         {
             SC.Refresh();
@@ -53,12 +61,12 @@ namespace PrisonService
 
         public void Start()
         {
-            if (Info.Status != Network.ServiceControllerStatus.Running && Info.AutoStart == true)
+            if (Info.Status != Network.ServiceControllerStatus.Running)
             {
-                Log.Info($"Э! {SC.ServiceName}, ты че, совсем охуел? А ну работать!");
                 try
                 {
                     SC.Start();
+                    Log.Info($"Э! {SC.ServiceName}:{Info.AutoStart}, ты че, совсем охуел? А ну работать!");
                 }
                 catch (Exception exc)
                 {
@@ -109,27 +117,44 @@ namespace PrisonService
     }
     public partial class ServiceManager
     {
-        public List<Service> Services;
-        public ENetClient Client;
+        public List<Service> Services = new List<Service>();
 
-        public ServiceManager(ServiceInfo[] Infos, ENetClient client)
+        public ServiceManager()
         {
             Log.Info("Пацаны, шухер! Главпетух в хате!");
-            Services = new List<Service>();
-            Client = client;
-            foreach (var info in Infos)
+            foreach (var info in Program.service1.client.ID.Services)
             {
+                Log.Info($"{info.Name}:{info.AutoStart}");
                 var service = new Service(info);
                 service.OnStatusChanged += StatusChanged;
                 Services.Add(service);
             }
         }
-
+        public void Dispose()
+        {
+            for(int i = 0; i < Services.Count; i++)
+            {
+                Services[i].OnStatusChanged -= StatusChanged;
+                Services[i].CheckOff();
+                Services[i] = null;
+                Services.RemoveAt(i);
+            }
+            Services.Clear();
+        }
         private void StatusChanged(ServiceInfo Info)
         {
-            Log.Info("Петушара {0} сменил свою масть на {1}", Info.Name, Info.Status);
-            NetworkPayload payload = new NetworkPayload(PacketType.ServiceStatus, NetworkSerialization.Serialize(Info), Client.ID.ToString(), "AllClients");
-            Client.Send(payload);
+            Log.Info("Петушара {0}({2}) сменил свою масть на {1}", Info.Name, Info.Status, Info.AutoStart);
+           
+            for(int i = 0; i < Program.service1.client.ID.Services.Length; i++)
+            {
+                if(Program.service1.client.ID.Services[i].name == Info.Name)
+                {
+                    Program.service1.client.ID.Services[i] = Info;
+                }
+            }
+            ApplyChange();
+            NetworkPayload payload = new NetworkPayload(PacketType.ServiceStatus, NetworkSerialization.Serialize(Info));
+            Program.service1.client.Send(payload);
         }
 
         public void StartAllServices()
@@ -137,7 +162,7 @@ namespace PrisonService
             Log.Info("Пытаемся разбудить петушар");
             foreach (var service in Services)
             {
-                if (service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Running)
+                if (service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Running && service.Info.AutoStart)
                 {
                     Log.Info("Петушара {0} послан чистить толчок", service.Name);
                     service.Start();
@@ -176,8 +201,7 @@ namespace PrisonService
             Service service = FindService(ServiceName);
             if (service != null && service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Running)
             {
-                //service.Info.AutoStart = true;
-                AutoStart(ServiceName, true);
+                Log.Info("Петушара {0} послан чистить толчок", service.Name);
                 service.Start();
             }
         }
@@ -185,20 +209,117 @@ namespace PrisonService
         public void StopService(string ServiceName)
         {
             Service service = FindService(ServiceName);
-            if (service != null && service.GetControllerStatus() == System.ServiceProcess.ServiceControllerStatus.Running)
+            if (service != null && service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Stopped)
             {
-                AutoStart(ServiceName, false);
-                //service.Info.AutoStart = false;
-                service.Stop();
+                try
+                {
+                    service.Stop();
+                }
+                catch
+                {
+                    var exeName = FindRunFile(service.Name).Replace(".exe", "");
+                    try
+                    {
+                        foreach (Process proc in Process.GetProcessesByName(exeName))
+                        {
+                            proc.Kill();
+                        }
+                    }
+                    catch (Exception exc)
+                    {
+                        Log.Error(exc.Message);
+                    }
+                }
             }
         }
-        public void AutoStart(string ServiceName, bool check)
+        internal void RestartService(string data)
         {
-            Log.Info("Атостарт");
+            Service service = FindService(data);
+            service.Stop();
+            int i = 0;
+            while(service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Stopped)
+            {
+                System.Threading.Thread.Sleep(1000);
+                i += 1;
+                if(i == 60)
+                {
+                    var exeName = FindRunFile(service.Name);
+                    try
+                    {
+                        foreach (Process proc in Process.GetProcessesByName(exeName))
+                        {
+                            proc.Kill();
+                        }
+                    }
+                    catch (Exception exc)
+                    {
+                        Log.Error(exc.Message);
+                    }
+                    break;
+                }
+                service.Start();
+            }
+            
+        }
+        private string FindRunFile(string name)
+        {
+            string ComputerName = "localhost";
+            ManagementScope Scope;
+
+            if (!ComputerName.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                ConnectionOptions Conn = new ConnectionOptions();
+                Conn.Username = "";
+                Conn.Password = "";
+                Conn.Authority = "ntlmdomain:DOMAIN";
+                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), Conn);
+            }
+            else
+                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), null);
+
+            Scope.Connect();
+            ObjectQuery Query = new ObjectQuery("SELECT * FROM Win32_Service");
+            ManagementObjectSearcher Searcher = new ManagementObjectSearcher(Scope, Query);
+
+            foreach (ManagementObject WmiObject in Searcher.Get())
+            {
+                if ((string)WmiObject["Name"] == name)
+                {
+                    var fullPath = ((string)WmiObject["PathName"]).Split(@"\".ToCharArray());
+                    var nameFile = fullPath[fullPath.Length - 1].Split(" -".ToCharArray())[0].Replace(".exe", "");
+                    return nameFile;
+                }
+            }
+            return "";
+        }
+
+        
+
+        private void ApplyChange()
+        {
+            foreach(var service in Services)
+            {
+                for(int i = 0; i < Program.service1.client.ID.Services.Length; i++)
+                {
+                    if (service.Info.Name == Program.service1.client.ID.Services[i].Name)
+                    {
+                        Program.service1.client.ID.Services[i] = service.Info;
+                    }
+                }
+                
+            }
+            Program.service1.ConfimJSON();
+        }
+        public void AutoStart(string ServiceName, bool autoStart, long checkInterval)
+        {
             Service service = FindService(ServiceName);
-            service.Info.AutoStart = check;
-            NetworkPayload payload = new NetworkPayload(PacketType.ServiceAutoStart, NetworkSerialization.Serialize(service.Info), Client.ID.ToString(), "AllClients");
-            Client.Send(payload);
+            service.Info.AutoStart = autoStart;
+            service.Info.CheckInterval = checkInterval;
+            if (service.Info.AutoStart)
+            {
+                service.Start();
+            }
+            ApplyChange();
         }
     }
 }
