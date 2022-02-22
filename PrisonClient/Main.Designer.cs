@@ -47,6 +47,7 @@
             this.ServiceCheckIntervalLabel = new MetroFramework.Controls.MetroLabel();
             this.ServiceNameLabel = new MetroFramework.Controls.MetroLabel();
             this.LogListBox = new System.Windows.Forms.ListBox();
+            this.tabPagePutty = new System.Windows.Forms.TabPage();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
             this.splitContainer1.Panel1.SuspendLayout();
             this.splitContainer1.Panel2.SuspendLayout();
@@ -118,12 +119,14 @@
             // tabControl1
             // 
             this.tabControl1.Controls.Add(this.tabPageServices);
+            this.tabControl1.Controls.Add(this.tabPagePutty);
             this.tabControl1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.tabControl1.Location = new System.Drawing.Point(0, 0);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
             this.tabControl1.Size = new System.Drawing.Size(862, 472);
             this.tabControl1.TabIndex = 0;
+            this.tabControl1.SelectedIndexChanged += new System.EventHandler(this.tabControl1_SelectedIndexChanged);
             // 
             // tabPageServices
             // 
@@ -325,6 +328,15 @@
             this.LogListBox.Size = new System.Drawing.Size(862, 131);
             this.LogListBox.TabIndex = 0;
             // 
+            // tabPagePutty
+            // 
+            this.tabPagePutty.Location = new System.Drawing.Point(4, 22);
+            this.tabPagePutty.Name = "tabPagePutty";
+            this.tabPagePutty.Size = new System.Drawing.Size(854, 446);
+            this.tabPagePutty.TabIndex = 1;
+            this.tabPagePutty.Text = "Кассы";
+            this.tabPagePutty.UseVisualStyleBackColor = true;
+            // 
             // Main
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -379,6 +391,7 @@
         private MetroFramework.Controls.MetroLabel ServiceCheckIntervalLabel;
         private MetroFramework.Controls.MetroTextBox ServiceCheckIntervalTextBox;
         public MetroFramework.Controls.MetroToggle ServiceAutoStartCheckBox;
+        private System.Windows.Forms.TabPage tabPagePutty;
     }
 }
 

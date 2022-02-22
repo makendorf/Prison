@@ -310,5 +310,29 @@ namespace PrisonClient
             };
             client.Send(payload);
         }
+
+        private void UpdatePanel()
+        {
+            switch (tabControl1.SelectedIndex)
+            {
+                case 1:
+                    {
+                        PuttyForm puttyForm = new PuttyForm()
+                        {
+                            Dock = DockStyle.Fill,
+                            TopLevel = false,
+                            FormBorderStyle = FormBorderStyle.None
+                        };
+                        tabControl1.TabPages[1].Controls.Add(puttyForm);
+                        puttyForm.Show();
+                        break;
+                    }
+            }
+        }
+
+        private void tabControl1_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            UpdatePanel();
+        }
     }
 }
