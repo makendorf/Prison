@@ -1,4 +1,4 @@
-﻿namespace PrisonClient
+﻿namespace PL
 {
     partial class Main
     {
@@ -46,8 +46,8 @@
             this.ServiceAutoStartLabel = new MetroFramework.Controls.MetroLabel();
             this.ServiceCheckIntervalLabel = new MetroFramework.Controls.MetroLabel();
             this.ServiceNameLabel = new MetroFramework.Controls.MetroLabel();
-            this.LogListBox = new System.Windows.Forms.ListBox();
             this.tabPagePutty = new System.Windows.Forms.TabPage();
+            this.LogListBox = new System.Windows.Forms.ListBox();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
             this.splitContainer1.Panel1.SuspendLayout();
             this.splitContainer1.Panel2.SuspendLayout();
@@ -319,15 +319,6 @@
             this.ServiceNameLabel.TabIndex = 0;
             this.ServiceNameLabel.Text = "Имя службы:";
             // 
-            // LogListBox
-            // 
-            this.LogListBox.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.LogListBox.FormattingEnabled = true;
-            this.LogListBox.Location = new System.Drawing.Point(0, 0);
-            this.LogListBox.Name = "LogListBox";
-            this.LogListBox.Size = new System.Drawing.Size(862, 131);
-            this.LogListBox.TabIndex = 0;
-            // 
             // tabPagePutty
             // 
             this.tabPagePutty.Location = new System.Drawing.Point(4, 22);
@@ -337,6 +328,15 @@
             this.tabPagePutty.Text = "Кассы";
             this.tabPagePutty.UseVisualStyleBackColor = true;
             // 
+            // LogListBox
+            // 
+            this.LogListBox.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.LogListBox.FormattingEnabled = true;
+            this.LogListBox.Location = new System.Drawing.Point(0, 0);
+            this.LogListBox.Name = "LogListBox";
+            this.LogListBox.Size = new System.Drawing.Size(862, 131);
+            this.LogListBox.TabIndex = 0;
+            // 
             // Main
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -345,6 +345,7 @@
             this.Controls.Add(this.splitContainer1);
             this.Name = "Main";
             this.Text = "Form1";
+            this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Main_FormClosing);
             this.Load += new System.EventHandler(this.Main_Load);
             this.splitContainer1.Panel1.ResumeLayout(false);
             this.splitContainer1.Panel2.ResumeLayout(false);

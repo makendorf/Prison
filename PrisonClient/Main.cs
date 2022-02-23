@@ -9,14 +9,15 @@ using System.Drawing;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace PrisonClient
+namespace PL
 {
     public partial class Main : MetroForm
     {
-        public ENetClient client = new ENetClient(8);
+        public PrisonClient client;
         public BindingList<ClientID> ShopListData = new BindingList<ClientID>();
         public BindingList<ServiceInfo> ServiceListData = new BindingList<ServiceInfo>();
         Autorization autorizationForm;
@@ -24,23 +25,14 @@ namespace PrisonClient
         public Main()
         {
             InitializeComponent();
+            
         }
 
         private void Main_Load(object sender, EventArgs e)
         {
             Log.OnLog += OnLogMessage;
-            ClientCnf();
-            Task.Factory.StartNew(() =>
-            {
-                try
-                {
-                    client.Connect("172.16.1.191", 2307);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex.StackTrace);
-                }
-            });
+            Connect();
+            
             Invoke(new Action(() =>
             {
                 ShopListBox.DisplayMember = "DisplayName";
@@ -53,14 +45,29 @@ namespace PrisonClient
                 ServicesListBox.ValueMember = "Status";
                 ServicesListBox.DataSource = ServiceListData;
             }));
-            
+
         }
-        
+        private void Connect()
+        {
+            client = new PrisonClient("127.0.0.1", 2307);
+            ClientCnf();
+            Task.Factory.StartNew(() =>
+            {
+                try
+                {
+                    client.Connect();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex.StackTrace);
+                }
+            });
+        }
         private void ClientCnf()
         {
             client.ID.Name = Dns.GetHostName() + "/" + Environment.UserName;
             client.ID.Type = ClientType.Client;
-            client.OnConnect += Connected;
+            client.OnConnected += Connected;
             client.OnDisconnect += Disconnected;
             client.OnReceive += Receive;
         }
@@ -73,7 +80,7 @@ namespace PrisonClient
             }));
         }
 
-        private void Receive(int Channel, NetworkPayload Packet, ENetPeer Sender)
+        private void Receive(NetworkPayload Packet)
         {
             Log.Info($"Тип данных: {Packet.Type} Источник: ");
             switch (Packet.Type)
@@ -157,18 +164,6 @@ namespace PrisonClient
         private void Disconnected()
         {
             Log.Warning("Клиент отключен");
-            Task.Factory.StartNew(() =>
-            {
-                try
-                {
-                    client.Connect("172.16.1.191", 2307);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex.StackTrace);
-
-                }
-            });
         }
         private void SendID()
         {
@@ -333,6 +328,27 @@ namespace PrisonClient
         private void tabControl1_SelectedIndexChanged(object sender, EventArgs e)
         {
             UpdatePanel();
+        }
+
+        private void Main_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            Task.Factory.StartNew(() =>
+            {
+                try
+                {
+                    client.Disconnect();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex.StackTrace);
+                }
+                finally
+                {
+                    client = null;
+                    Environment.Exit(0);
+                }
+            });
+            
         }
     }
 }

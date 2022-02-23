@@ -10,14 +10,14 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace PrisonClient
+namespace PL
 {
     public partial class Autorization : MetroForm
     {
         public UserList[] Username;
-        ENetClient Client;
+        PrisonClient Client;
         public bool Auth = false;
-        public Autorization(ENetClient client)
+        public Autorization(PrisonClient client)
         {
             InitializeComponent();
             Client = client;

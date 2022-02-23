@@ -73,6 +73,7 @@ namespace Network
         None = 0,
         Info,
         ClientID,
+        ClientDisconected,
         ServiceStatus,
         ServiceStop,
         ServiceStart,

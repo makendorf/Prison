@@ -1,4 +1,4 @@
-﻿namespace PrisonClient
+﻿namespace PL
 {
     partial class PuttyForm
     {

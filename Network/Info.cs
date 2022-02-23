@@ -4,10 +4,13 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Threading;
 
 namespace Network
 {
@@ -92,24 +95,70 @@ namespace Network
 
 
 
+
     [Serializable]
     public struct Info
     {
-        public ENetPeer Client;
+        public TcpClient Client;
         public ClientID ID;
-        public Info(ENetPeer client, ClientID clientID = null) : this()
+        public TcpState State;
+        [NonSerialized]
+        public Thread Handler;
+        public void DropConnection()
         {
-            if (clientID == null) 
+            if (State != TcpState.Established)
+            {
+                return;
+            }
+            Client.Close();
+            State = TcpState.Unknown;
+        }
+
+        public Socket GetSocket()
+        {
+            return Client.Client;
+        }
+        public override bool Equals(object obj)
+        {
+            if ((obj == null) || !GetType().Equals(obj.GetType()))
+            {
+                return false;
+            }
+            else
+            {
+                Info p = (Info)obj;
+                return (Client == p.Client);
+            }
+        }
+
+        public override int GetHashCode()
+        {
+            return Client.GetHashCode();
+        }
+
+        public override string ToString()
+        {
+            return ID.ToString();
+        }
+
+        public Info(TcpClient client, ClientID clientID = null) : this()
+        {
+            if (clientID == null)
             {
                 ID = new ClientID();
+                Client = client;
+                Handler = null;
+                State = TcpState.Unknown;
             }
             else
             {
                 ID = clientID;
+                Client = client;
+                Handler = null;
+                State = TcpState.Unknown;
             }
             Client = client;
         }
-
     }
-   
+
 }

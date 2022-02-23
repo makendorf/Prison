@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-namespace PrisonClient.Properties {
+namespace PL.Properties {
     using System;
     
     

@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace PrisonClient
+namespace PL
 {
     internal static class Program
     {

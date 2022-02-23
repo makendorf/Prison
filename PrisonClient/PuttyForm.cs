@@ -13,7 +13,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace PrisonClient
+namespace PL
 {
     public partial class PuttyForm : Form
     {
