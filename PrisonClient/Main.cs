@@ -21,7 +21,7 @@ namespace PL
         public BindingList<ClientID> ShopListData = new BindingList<ClientID>();
         public BindingList<ServiceInfo> ServiceListData = new BindingList<ServiceInfo>();
         Autorization autorizationForm;
-        public bool debug = false;
+        public bool debug = true;
         public Main()
         {
             InitializeComponent();
@@ -41,7 +41,7 @@ namespace PL
             }));
             Invoke(new Action(() =>
             {
-                ServicesListBox.DisplayMember = "Name";
+                ServicesListBox.DisplayMember = "DisplayName";
                 ServicesListBox.ValueMember = "Status";
                 ServicesListBox.DataSource = ServiceListData;
             }));
@@ -65,7 +65,7 @@ namespace PL
         }
         private void ClientCnf()
         {
-            client.ID.Name = Dns.GetHostName() + "/" + Environment.UserName;
+            client.ID.DisplayName = client.ID.Name = Dns.GetHostName() + "/" + Environment.UserName;
             client.ID.Type = ClientType.Client;
             client.OnConnected += Connected;
             client.OnDisconnect += Disconnected;
@@ -91,7 +91,7 @@ namespace PL
                         client.ID.GUID = ClID.ToString();
                         Log.Success($"Успешная регистрация в системе");
                         Log.Info($"GUID: {client.ID.GUID}, {client.ID.Name}");
-                        if (debug)
+                        if (!debug)
                         {
                             Invoke(new Action(() =>
                             {
@@ -164,6 +164,7 @@ namespace PL
         private void Disconnected()
         {
             Log.Warning("Клиент отключен");
+            Connect();
         }
         private void SendID()
         {
@@ -199,6 +200,7 @@ namespace PL
                         ServiceListData[i] = serviceData[i];
                     }
                 }
+                UpdatePanel();
             }));
         }
 
@@ -312,7 +314,7 @@ namespace PL
             {
                 case 1:
                     {
-                        PuttyForm puttyForm = new PuttyForm()
+                        PuttyForm puttyForm = new PuttyForm(ShopListData[ShopListBox.SelectedIndex])
                         {
                             Dock = DockStyle.Fill,
                             TopLevel = false,

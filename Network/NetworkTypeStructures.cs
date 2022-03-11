@@ -8,6 +8,14 @@ using System.Runtime.Serialization.Formatters.Binary;
 namespace Network
 {
     [Serializable]
+    public struct ShopBox
+    {
+        public string IP { get; set; }
+        public int Port { get; set; }
+        public string Name { get; set; }
+
+    }
+    [Serializable]
     public class ServiceConfig
     {
         public string IP { get; set; }
@@ -73,7 +81,7 @@ namespace Network
         None = 0,
         Info,
         ClientID,
-        ClientDisconected,
+        Ping,
         ServiceStatus,
         ServiceStop,
         ServiceStart,

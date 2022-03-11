@@ -26,6 +26,8 @@ namespace PrisonService
 
         private readonly ServiceController SC;
         private readonly Timer StatusCheckTimer;
+        private Timer KillServiceTimer;
+
 
 
         public Service(ServiceInfo info)
@@ -36,7 +38,30 @@ namespace PrisonService
             StatusCheckTimer.Elapsed += CheckStatus;
             StatusCheckTimer.Interval = info.CheckInterval;//info.CheckInterval;
             StatusCheckTimer.Enabled = true;
+
+            KillServiceTimer = new Timer();
+            KillServiceTimer.Elapsed += KillService;
+            KillServiceTimer.Interval = 60000;
+
             OnStatusChanged += Service_OnStatusChanged;
+        }
+
+        private void KillService(object sender, ElapsedEventArgs e)
+        {
+            var exeName = FindRunFile();
+            try
+            {
+                foreach (Process proc in Process.GetProcessesByName(exeName))
+                {
+                    proc.Kill();
+                    Log.Error($"Пришлось порешить петушару {Name}");
+                    System.Threading.Thread.Sleep(1000);
+                }
+            }
+            catch (Exception exc)
+            {
+                Log.Error(exc.Message);
+            }
         }
 
         private void Service_OnStatusChanged(ServiceInfo Info)
@@ -47,6 +72,15 @@ namespace PrisonService
                 {
                     Start();
                 }
+            }
+            if(!KillServiceTimer.Enabled && (Info.Status != Network.ServiceControllerStatus.Stopped || Info.Status != Network.ServiceControllerStatus.Running))
+            {
+                Log.Error($"Петушара {Name} на грани смерти");
+                KillServiceTimer.Start();
+            }
+            if (KillServiceTimer.Enabled && (Info.Status == Network.ServiceControllerStatus.Stopped || Info.Status == Network.ServiceControllerStatus.Running))
+            {
+                KillServiceTimer.Stop();
             }
         }
         public void CheckOff()
@@ -112,13 +146,43 @@ namespace PrisonService
                 OnStatusChanged?.Invoke(Info);
             }
         }
+        private string FindRunFile()
+        {
+            string ComputerName = "localhost";
+            ManagementScope Scope;
+
+            if (!ComputerName.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                ConnectionOptions Conn = new ConnectionOptions();
+                Conn.Username = "";
+                Conn.Password = "";
+                Conn.Authority = "ntlmdomain:DOMAIN";
+                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), Conn);
+            }
+            else
+                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), null);
+
+            Scope.Connect();
+            ObjectQuery Query = new ObjectQuery("SELECT * FROM Win32_Service");
+            ManagementObjectSearcher Searcher = new ManagementObjectSearcher(Scope, Query);
+
+            foreach (ManagementObject WmiObject in Searcher.Get())
+            {
+                if ((string)WmiObject["Name"] == Name)
+                {
+                    var fullPath = ((string)WmiObject["PathName"]).Split(@"\".ToCharArray());
+                    var nameFile = fullPath[fullPath.Length - 1].Split(" -".ToCharArray())[0].Replace(".exe", "");
+                    return nameFile;
+                }
+            }
+            return "";
+        }
 
 
     }
     public partial class ServiceManager
     {
         public List<Service> Services = new List<Service>();
-
         public ServiceManager()
         {
             Log.Info("Пацаны, шухер! Главпетух в хате!");
@@ -130,14 +194,23 @@ namespace PrisonService
                 Services.Add(service);
             }
         }
+
+
         public void Dispose()
         {
             for(int i = 0; i < Services.Count; i++)
             {
-                Services[i].OnStatusChanged -= StatusChanged;
-                Services[i].CheckOff();
-                Services[i] = null;
-                Services.RemoveAt(i);
+                try
+                {
+                    Services[i].OnStatusChanged -= StatusChanged;
+                    Services[i].CheckOff();
+                    Services[i] = null;
+                    Services.RemoveAt(i);
+                }
+                catch (Exception)
+                {
+
+                }
             }
             Services.Clear();
         }
@@ -147,7 +220,7 @@ namespace PrisonService
            
             for(int i = 0; i < Program.service1.client.ID.Services.Length; i++)
             {
-                if(Program.service1.client.ID.Services[i].name == Info.Name)
+                if(Program.service1.client.ID.Services[i].Name == Info.Name)
                 {
                     Program.service1.client.ID.Services[i] = Info;
                 }
@@ -211,25 +284,7 @@ namespace PrisonService
             Service service = FindService(ServiceName);
             if (service != null && service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Stopped)
             {
-                try
-                {
-                    service.Stop();
-                }
-                catch
-                {
-                    var exeName = FindRunFile(service.Name).Replace(".exe", "");
-                    try
-                    {
-                        foreach (Process proc in Process.GetProcessesByName(exeName))
-                        {
-                            proc.Kill();
-                        }
-                    }
-                    catch (Exception exc)
-                    {
-                        Log.Error(exc.Message);
-                    }
-                }
+                service.Stop();
             }
         }
         internal void RestartService(string data)
@@ -240,61 +295,11 @@ namespace PrisonService
             while(service.GetControllerStatus() != System.ServiceProcess.ServiceControllerStatus.Stopped)
             {
                 System.Threading.Thread.Sleep(1000);
-                i += 1;
-                if(i == 60)
-                {
-                    var exeName = FindRunFile(service.Name);
-                    try
-                    {
-                        foreach (Process proc in Process.GetProcessesByName(exeName))
-                        {
-                            proc.Kill();
-                        }
-                    }
-                    catch (Exception exc)
-                    {
-                        Log.Error(exc.Message);
-                    }
-                    break;
-                }
                 service.Start();
             }
             
         }
-        private string FindRunFile(string name)
-        {
-            string ComputerName = "localhost";
-            ManagementScope Scope;
-
-            if (!ComputerName.Equals("localhost", StringComparison.OrdinalIgnoreCase))
-            {
-                ConnectionOptions Conn = new ConnectionOptions();
-                Conn.Username = "";
-                Conn.Password = "";
-                Conn.Authority = "ntlmdomain:DOMAIN";
-                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), Conn);
-            }
-            else
-                Scope = new ManagementScope(String.Format("\\\\{0}\\root\\CIMV2", ComputerName), null);
-
-            Scope.Connect();
-            ObjectQuery Query = new ObjectQuery("SELECT * FROM Win32_Service");
-            ManagementObjectSearcher Searcher = new ManagementObjectSearcher(Scope, Query);
-
-            foreach (ManagementObject WmiObject in Searcher.Get())
-            {
-                if ((string)WmiObject["Name"] == name)
-                {
-                    var fullPath = ((string)WmiObject["PathName"]).Split(@"\".ToCharArray());
-                    var nameFile = fullPath[fullPath.Length - 1].Split(" -".ToCharArray())[0].Replace(".exe", "");
-                    return nameFile;
-                }
-            }
-            return "";
-        }
-
         
-
         private void ApplyChange()
         {
             foreach(var service in Services)

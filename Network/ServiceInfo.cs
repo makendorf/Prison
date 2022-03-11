@@ -15,10 +15,11 @@ namespace Network
     public partial class ServiceInfo: INotifyPropertyChanged
     {
 
-        public string name;
-        public long checkInterval;
-        public bool autoStart;
-        public ServiceControllerStatus status;
+        private string name;
+        private string displayName;
+        private long checkInterval;
+        private bool autoStart;
+        private ServiceControllerStatus status;
         public string Name
         {
             get => name;
@@ -27,6 +28,16 @@ namespace Network
                 if (value == name) return;
                 name = value;
                 OnPropertyChanged("Name");
+            }
+        }
+        public string DisplayName
+        {
+            get => displayName;
+            set
+            {
+                if (value == displayName) return;
+                displayName = value;
+                OnPropertyChanged("DisplayName");
             }
         }
         public long CheckInterval

@@ -30,10 +30,23 @@ namespace Network
         private string name = "Undefined";
         //  Отображаемое имя клиента
         private string displayName = "Undefined";
+        private string ip = "127.0.0.1";
         public bool IsOnline { get; set; } = false;
         // Тип клиента служба/клиент
         public ClientType Type;
         private ServiceInfo[] services = null;
+        private ShopBox[] shopBoxList = null;
+
+        public ShopBox[] ShopBoxList
+        {
+            get => shopBoxList;
+            set
+            {
+                if (value == shopBoxList) return;
+                shopBoxList = value;
+                OnPropertyChanged("Services");
+            }
+        }
         public ServiceInfo[] Services
         {
             get => services;
@@ -42,6 +55,16 @@ namespace Network
                 if (value == services) return;
                 services = value;
                 OnPropertyChanged("Services");
+            }
+        }
+        public string IP
+        {
+            get => ip;
+            set
+            {
+                if (value == ip) return;
+                ip = value;
+                OnPropertyChanged("GUID");
             }
         }
         public string GUID
@@ -111,6 +134,7 @@ namespace Network
                 return;
             }
             Client.Close();
+            Handler.Abort();
             State = TcpState.Unknown;
         }
 

@@ -112,6 +112,7 @@ namespace Network
         {
             if (client.State != TcpState.Established)
             {
+                Log.Info(client.State.ToString());
                 return;
             }
             try
@@ -160,7 +161,6 @@ namespace Network
                         client.DropConnection();
                         break;
                     }
-
                 }
             }
             OnClientDisconnected?.Invoke(ref client);

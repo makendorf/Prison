@@ -82,7 +82,14 @@ namespace PS
                     {
                         foreach (var item2 in item.ID.Services)
                         {
-                            Log.Success($"Служба:{item2.Name}");
+                            Log.Success($"Служба: {item2.Name}");
+                        }
+                    }
+                    if(item.ID.ShopBoxList != null)
+                    {
+                        foreach (var item2 in item.ID.ShopBoxList)
+                        {
+                            Log.Success($"Касса: {item2.Name} {item2.IP}:{item2.Port}");
                         }
                     }
                 }
@@ -95,7 +102,10 @@ namespace PS
 
         static void ReceivedData(NetworkPayload Packet, ref Info client)
         {
-            Log.Info($"Тип пакета: {Packet.Type} Отправитель: {client.ID.Type} /  {client.ID.Name} / {client.ID.GUID}");
+            if(Packet.Type != PacketType.Ping)
+            {
+                Log.Info($"Тип пакета: {Packet.Type} Отправитель: {client.ID.Type} /  {client.ID.Name} / {client.ID.GUID}");
+            }
             switch (Packet.Type)
             {
                 case PacketType.ClientID:
@@ -136,17 +146,18 @@ namespace PS
                             case ClientType.Service:
                                 {
                                     var listPeer = server.GetClients();
+                                    Info CurrentVal = new Info();
+                                    int _ID = 100;
                                     for (int i = 0; i < listPeer.Count; i++)
                                     {
                                         if (ID.GUID == listPeer[i].ID.GUID)
                                         {
-                                            Info CurrentVal;
+                                            _ID = i;
                                             CurrentVal = listPeer[i];
                                             CurrentVal.Client = client.Client;
                                             CurrentVal.ID.IsOnline = true;
                                             listPeer[i] = CurrentVal;
 
-                                            Log.Success($"{listPeer[i].ID.DisplayName}: {(listPeer[i].ID.IsOnline ? "Online" : "Offline")}");
                                             NetworkPayload payload = new NetworkPayload
                                             {
                                                 Type = PacketType.ClientID,
@@ -155,11 +166,17 @@ namespace PS
                                             server.Send(client, NetworkSerialization.Serialize(payload));
                                         }
                                     }
-                                    for(int i = listPeer.Count; i == 0; i--)
+                                    for(int i = listPeer.Count - 1; i >= 0; i--)
                                     {
-                                        if (ID.GUID == listPeer[i].ID.GUID)
+                                        if (client.Client == listPeer[i].Client)
                                         {
+                                            CurrentVal.Client = client.Client;
+                                            CurrentVal.State = listPeer[i].State;
+                                            CurrentVal.Handler = listPeer[i].Handler;
+                                            listPeer[_ID] = CurrentVal;
+                                            Log.Success($"{listPeer[_ID].ID.DisplayName}: {(listPeer[_ID].ID.IsOnline ? "Online" : "Offline")}");
                                             listPeer.RemoveAt(i);
+                                            break;
                                         }
                                     }
                                     ConfimJSON();
@@ -215,11 +232,13 @@ namespace PS
                         {
                             if (listPeer[i].Client == client.Client)
                             {
-                                for (int j = 0; j < listPeer[i].ID.Services.Length; j++)
+                                var cl = listPeer[i];
+                                for (int j = 0; j < cl.ID.Services.Length; j++)
                                 {
-                                    if (servInfo.Name == listPeer[i].ID.Services[j].Name)
+                                    if (servInfo.Name == cl.ID.Services[j].Name)
                                     {
-                                        listPeer[i].ID.Services[j] = servInfo;
+                                        cl.ID.Services[j] = servInfo;
+                                        listPeer[i] = cl;
                                         ConfimJSON();
                                         break;
                                     }
@@ -248,11 +267,13 @@ namespace PS
                         {
                             if (listPeer[i].ID.GUID == Packet.Receiver)
                             {
-                                for (int j = 0; j < listPeer[i].ID.Services.Length; j++)
+                                var clID = listPeer[i];
+                                for (int j = 0; j < clID.ID.Services.Length; j++)
                                 {
-                                    if (listPeer[i].ID.Services[j].Name == SC.Name)
+                                    if (clID.ID.Services[j].Name == SC.Name)
                                     {
-                                        listPeer[i].ID.Services[j].AutoStart = SC.AutoStart;
+                                        clID.ID.Services[j].AutoStart = SC.AutoStart;
+                                        listPeer[i] = clID;
                                         ConfimJSON();
                                         Packet.Data = NetworkSerialization.Serialize(listPeer[i].ID.Services[j]);
                                         server.Send(listPeer[i], NetworkSerialization.Serialize(Packet));
@@ -304,6 +325,10 @@ namespace PS
                         }
                         break;
                     }
+                case PacketType.Ping:
+                    {
+                        break;
+                    }
             }
         }
         private static byte[] CreateShopList()
@@ -340,13 +365,25 @@ namespace PS
 
         static void ClientDisconnected(ref Info client)
         {
-            Console.WriteLine("Disconnected: {0}", client.ID.Name);
             var listPeer = server.GetClients();
             for (int i = 0; i < listPeer.Count; i++)
             {
-                if (listPeer[i].ID.Type == ClientType.Client && client.Client == listPeer[i].Client)
+                if(client.Client == listPeer[i].Client)
                 {
-                    listPeer.RemoveAt(i);
+                    Console.WriteLine("Disconnected: {0}", listPeer[i].ID.DisplayName);
+                    if (listPeer[i].ID.Type == ClientType.Client)
+                    {
+                        listPeer.RemoveAt(i);
+                        break;
+                    }
+                    if(listPeer[i].ID.Type != ClientType.Service)
+                    {
+                        listPeer[i].DropConnection();
+                        var CurrentVal = listPeer[i];
+                        CurrentVal.ID.IsOnline = false;
+                        listPeer[i] = CurrentVal;
+                        break;
+                    }
                 }
             }
         }

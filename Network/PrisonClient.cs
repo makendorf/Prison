@@ -26,7 +26,7 @@ namespace Network
         private int _tryNum = 0;
 
         private readonly TcpClient client;
-
+        private System.Timers.Timer _timerPing;
         public IPAddress Address { get { return _address; } }
         public int Port { get { return _port; } }
 
@@ -41,8 +41,11 @@ namespace Network
             client = new TcpClient();
             ID = new ClientID();
             OnConnectionFailure += Reconnect;
+            _timerPing = new System.Timers.Timer();
+            _timerPing.Interval = 1000;
+            _timerPing.Elapsed += _timerPing_Elapsed;
+       
         }
-
         public PrisonClient(IPAddress addr, int port)
         {
             _running = false;
@@ -51,6 +54,22 @@ namespace Network
             client = new TcpClient();
             ID = new ClientID();
             OnConnectionFailure += Reconnect;
+        }
+        private void _timerPing_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            if (_running)
+            {
+                NetworkPayload ping = new NetworkPayload()
+                {
+                    Data = new byte[0],
+                    Type = PacketType.Ping
+                };
+                Send(NetworkSerialization.Serialize(ping));
+            }
+            else
+            {
+                _timerPing.Stop();
+            }
         }
 
         private void Reconnect()
@@ -66,7 +85,6 @@ namespace Network
             Log.Info("Переподключение...");
             Thread.Sleep(1000);
             Connect();
-            
         }
 
         public bool IsConnected()
@@ -81,6 +99,7 @@ namespace Network
                 Log.Info("Подключение...");
                 client.Connect(Address, Port);
                 _running = true;
+                _timerPing.Start();
                 Handler = new Thread(new ParameterizedThreadStart(HandleConnection));
                 Handler.Start(client);
                 OnConnected?.Invoke();
@@ -95,8 +114,8 @@ namespace Network
         public void Disconnect()
         {
             _running = false;
-            client.Client.Disconnect(true);
-            Connect();
+            Handler.Abort();
+            client.Client.Disconnect(false);
         }
 
         public void Send(byte[] data)
@@ -134,7 +153,7 @@ namespace Network
             }
         }
 
-        public void Send(NetworkPayload Payload, byte Channel = 0, bool Reliable = true)
+        public void Send(NetworkPayload Payload)
         {
             Payload.Sender = ID.ToString();
             if (String.IsNullOrEmpty(Payload.Receiver))
@@ -162,7 +181,6 @@ namespace Network
             while (_running)
             {
                 connected = IsConnected();
-                Log.Info(client.Connected.ToString());
                 if (connected && stream.DataAvailable)
                 {
                     byte[] data = new byte[tcp.Client.Available];

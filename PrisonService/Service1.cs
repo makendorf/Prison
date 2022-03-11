@@ -5,15 +5,14 @@ using System.ServiceProcess;
 using Newtonsoft.Json;
 using System;
 using System.Timers;
+using System.Threading.Tasks;
 
 namespace PrisonService
 {
-
-
     public partial class Service1 : ServiceBase
     {
         public ServiceManager Manager = null;
-        public ENetClient client = new ENetClient(8);
+        public PrisonClient client = new PrisonClient("127.0.0.1", 2307);
         static ServiceConfig cfg = new ServiceConfig();
         public Service1()
         {
@@ -65,32 +64,25 @@ namespace PrisonService
                 Port = config[0].Port,
             };
         }
-
+        private void Connect()
+        {
+            client = new PrisonClient("127.0.0.1", 2307);
+            Log.Info("Считываем GUID");
+            ReadAuth();
+            Log.Info("Считываем конфиг");
+            ReadServerCfg();
+            client.OnConnected += Connected;
+            client.OnDisconnect += Disconnected;
+            client.OnReceive += Receive;
+            client.Connect();
+        }
         protected override void OnStart(string[] args)
         {
             try
             {
                 Log.OnLog += WriteLog;
                 #region Подключение к серверу
-                client.OnConnect += Connected;
-                client.OnDisconnect += Disconnected;
-                client.OnReceive += Receive;
-                Log.Info("Считываем GUID");
-                ReadAuth();
-
-                //Manager = new ServiceManager();
-                //Manager.StartAllServices();
-
-                Log.Info("Считываем конфиг");
-                ReadServerCfg();
-                client.Connect(cfg.IP, cfg.Port);
-
-                //Timer timerReqServ = new Timer();
-                //timerReqServ.Elapsed += TimerReqServ_Elapsed;
-                //timerReqServ.Interval = 10000;
-                //timerReqServ.Start();
-
-                Log.Info("Тюремщик вышел пиздить уебков");
+                Connect();
                 #endregion
             }
             catch (Exception exc)
@@ -125,7 +117,7 @@ namespace PrisonService
         {
             client.Send(new byte[0], PacketType.ServiceListRequest);
         }
-        private void Receive(int Channel, NetworkPayload Packet, ENetPeer Sender)
+        private void Receive(NetworkPayload Packet)
         {
             Log.Info($"Тип данных: {Packet.Type} Размер данных: {Packet.Data.Length}");
             switch (Packet.Type)
@@ -221,7 +213,7 @@ namespace PrisonService
         private void Disconnected()
         {
             Log.Info("Соединение с сервером разорвано");
-            client.Connect(cfg.IP, cfg.Port);
+            Connect();
         }
         private void Connected()
         {
@@ -230,8 +222,22 @@ namespace PrisonService
         }
         protected override void OnStop()
         {
-            //client.Disconnect();
-            //Service.Stop();
+            Task.Factory.StartNew(() =>
+            {
+                try
+                {
+                    Manager.Dispose();
+                    client.Disconnect();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex.StackTrace);
+                }
+                finally
+                {
+                    client = null;
+                }
+            });
         }
     }
     
