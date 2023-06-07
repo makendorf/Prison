@@ -1,0 +1,732 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Report ScriptLanguage="CSharp" ReferencedAssemblies="System.dll&#13;&#10;System.Drawing.dll&#13;&#10;System.Windows.Forms.dll&#13;&#10;System.Data.dll&#13;&#10;System.Xml.dll&#13;&#10;Sm.Objects.dll&#13;&#10;Sm.Interfaces.dll&#13;&#10;Sm.Core.dll&#13;&#10;Sm.Forms.dll&#13;&#10;Sm.AppServer.Interfaces.dll&#13;&#10;Sm.AppServer.Link.dll&#13;&#10;Sm.FastReports.dll&#13;&#10;Sm.FastReports.Link.dll&#13;&#10;Oracle.ManagedDataAccess.dll" ConvertNulls="false" StartReportEvent="_StartReport" ReportInfo.Created="06/22/2010 10:01:00" ReportInfo.Modified="12/28/2020 11:15:23" ReportInfo.CreatorVersion="1.9.2.0">
+  <ScriptText>
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Collections.ObjectModel;
+    using System.ComponentModel;
+    using System.Windows.Forms;
+    using System.Drawing;
+    using System.Data;
+    using FastReport;
+    using FastReport.Data;
+    using FastReport.Dialog;
+    using FastReport.Table;
+    using FastReport.Utils;
+    using FastReport.Format;
+
+	using Oracle.ManagedDataAccess.Client;
+	
+    using Sm.FastReports;
+    using Sm.FastReports.Link;
+    using Sm.Interfaces;
+    using Sm.Objects;
+    using Sm.Core;
+    using System.IO;
+
+    namespace FastReport
+    {
+    public class ReportScript
+    {
+    RepHost host;
+
+    // название отчета
+    private string sRepName = &quot;Товарный отчет и налоги&quot;;
+    // подзаголовок отчета: период отчета
+    private string sDateName;
+    // подзаголовок отчета: группы товаров
+    private string sGroupName;
+    // подзаголовок отчета: места хранения
+    private string sLocName;
+    // подзаголовок отчета: типы артикулов
+    private string sCardTypeName = &quot;&quot;;
+    // контрагент &quot;От имени&quot;
+    private string sUserName;
+    // даты переноса данных в аналитическую базу и расчета себестоимости
+    private string sDateTransfer;
+    // сумма НДС к зачету
+    private decimal decVATPaid = 0;
+    // сумма НДС к уплате
+    private decimal decVATNoPaid = 0;
+    // итого по кредитным картам
+    private decimal decSumFullCredCards = 0;
+	
+	private string nds20120 = "";
+	private string real20120 = "";
+
+    private void _StartReport(object sender, EventArgs e)
+    {
+    // Хост отчёта даёт доступ к полезным сервисам
+    host = new RepHost(Report);
+
+    
+    // Стартуем транзакцию
+    RepTransaction transaction = new RepTransaction(host.Connection);
+
+    // контрагент &quot;От имени&quot;
+      sUserName = RepClientInfo.GetClientName(host.Connection, Report.GetParameterValue(&quot;P_USER_ID&quot;));
+     
+      // даты переноса данных в аналитическую базу и расчета себестоимости
+      sDateTransfer = RepOracleRunner.ExecuteScalar&lt;string&gt;(host.Connection, &quot;select supermag.RepTools.RepString(0) from dual&quot;);
+      
+      if ( 0 != ToInt32(Report.GetParameterValue(&quot;P_IMPUTEDTAX&quot;)) )
+        sRepName += &quot; (без учета налогов)&quot;;
+
+      if ( 0 == ToInt32(Report.GetParameterValue(&quot;P_WITHMONEY&quot;)) )
+        sCardTypeName = &quot;Не рассматриваются артикулы типа \&quot;деньги\&quot;&quot;;
+     
+      // подзаголовок отчета: период отчета
+      string sFirstDate = ToString(Report.GetParameterValue(&quot;P_FIRSTDATE&quot;));
+      string sLastDate = ToString(Report.GetParameterValue(&quot;P_LASTDATE&quot;));
+      sDateName = &quot;с &quot;+sFirstDate+&quot; по &quot;+sLastDate+&quot; ( &quot;+ToString((RepConvert.ToSmDate(sLastDate)-RepConvert.ToSmDate(sFirstDate)).Days+1)+&quot; дн. )&quot;;
+                                   
+      // фильтр по группам товаров
+      RepOracleRunner.ExecuteProcedure(host.Connection,&quot;Supermag.RepTools.LoadClass&quot;, 
+        Report.GetParameterValue(&quot;P_GROUP_ALL&quot;),
+        Report.GetParameterValue(&quot;P_BGROUP&quot;),
+        Report.GetParameterValue(&quot;P_GROUP_TREE&quot;)); 
+      // подзаголовок отчета: группы товаров
+      sGroupName = RepOracleRunner.ExecuteScalar&lt;string&gt;(host.Connection, &quot;select supermag.RepTools.ClassString(10) from dual&quot;);
+     
+      // фильтр по местам хранения
+      RepOracleRunner.ExecuteProcedure(host.Connection,&quot;Supermag.RepTools.LoadLoc&quot;, 
+        Report.GetParameterValue(&quot;P_STORED_ALL&quot;),
+        Report.GetParameterValue(&quot;P_STORED_NAME&quot;),
+        Report.GetParameterValue(&quot;P_PARTNER&quot;),
+        Report.GetParameterValue(&quot;P_RGNID&quot;),
+        Report.GetParameterValue(&quot;P_LASTDATE&quot;)); 
+      // подзаголовок отчета: места хранения
+      sLocName = RepOracleRunner.ExecuteScalar&lt;string&gt;(host.Connection, &quot;select supermag.RepTools.LocString(11) from dual&quot;);
+     
+      string sSQL;
+      if ( 0 != ToInt32(Report.GetParameterValue(&quot;P_VAT_PAID_VIEW&quot;)) )
+      { // считаем НДС к зачету
+        sSQL = SqlFormat(
+        &quot;select round(nvl(sum(t.vatsum),0),{0:N})&quot;+
+        &quot; from (&quot;+ 
+          &quot; select decode(sum(s.totalsum),0,0,sum(s.totalvat)*dd.paysum/sum(s.totalsum)) vatsum&quot;+ 
+          &quot; from (&quot;+
+            &quot; select d.ndoc,decode(d.doctype,'WI',f.LinkSum,-f.LinkSum) paysum&quot;+
+            &quot; from supermag.ffdocuments d&quot;+
+              &quot;,supermag.SVFinBasesBrief f&quot;+
+              &quot;,supermag.SMDocuments dPay&quot;+
+              &quot;,supermag.SMPayOrders fd&quot;+
+            &quot; where d.doctype in ('WI','WO')&quot;+
+            &quot; and d.opcode in (select o.id from supermag.saoperation o&quot;+ 
+                              &quot; where o.accountflag=0&quot;+ 
+                              &quot; and ( (o.incometype=0 and o.expensetype=2)&quot;+ 
+                                &quot; or (o.incometype=1 and o.expensetype=0) )&quot;+
+                              &quot;)&quot;+
+            &quot; and d.id=f.BaseID&quot;+
+            &quot; and d.doctype=f.BaseDocType&quot;+
+            &quot; and f.doctype=fd.doctype&quot;+
+            &quot; and f.id=fd.id&quot;+
+            &quot; and dPay.doctype=fd.doctype&quot;+
+            &quot; and dPay.id=fd.id&quot;+
+            &quot; and dPay.DocState=3&quot;+
+            &quot; and ((d.Createdat &gt;= fd.paydate and d.Createdat between  &quot;+RepSqlText.ToSqlDate(sFirstDate)+&quot; and &quot;+RepSqlText.ToSqlDate(sLastDate)+&quot;)&quot;+
+              &quot; or (d.Createdat &lt; fd.paydate and fd.paydate between  &quot;+RepSqlText.ToSqlDate(sFirstDate)+&quot; and &quot;+RepSqlText.ToSqlDate(sLastDate)+&quot;)&quot;+
+            &quot;)&quot;+
+            RepOracleRunner.ExecuteScalar&lt;string&gt;(host.Connection, &quot;select supermag.RepTools.LocString(0,'nvl(d.LocationFrom,d.LocationTo)') from dual&quot;)+  
+          &quot;) dd, supermag.ffspec s&quot;+
+        &quot; where dd.ndoc=s.ndoc&quot;+
+        &quot; group by dd.ndoc,dd.paysum&quot;+
+        &quot;) t&quot;
+        , RepFormat.GetRublePrec(host.References)
+        );
+        decVATPaid = RepOracleRunner.ExecuteScalar&lt;decimal&gt;(host.Connection, sSQL);
+      }
+      else
+        ReportSummary.Visible = false;
+      
+      // заполняем временные таблицы
+      RepOracleRunner.ExecuteProcedure(host.Connection,&quot;Supermag.Rep_TovReport&quot;, 
+        Report.GetParameterValue(&quot;P_FIRSTDATE&quot;),
+        Report.GetParameterValue(&quot;P_LASTDATE&quot;),
+        Report.GetParameterValue(&quot;P_RGNID&quot;),
+        Report.GetParameterValue(&quot;P_IMPUTEDTAX&quot;),
+        Report.GetParameterValue(&quot;P_WITHMONEY&quot;));           
+      
+      //string body123 = ToString(Report.GetParameterValue(&quot;P_FIRSTDATE&quot;)) + Environment.NewLine + 
+      //ToString(Report.GetParameterValue(&quot;P_LASTDATE&quot;)) +   Environment.NewLine + 
+      //ToString(Report.GetParameterValue(&quot;P_RGNID&quot;)) +   Environment.NewLine + 
+      //ToString(Report.GetParameterValue(&quot;P_IMPUTEDTAX&quot;))  +   Environment.NewLine +
+      // ToString(Report.GetParameterValue(&quot;P_WITHMONEY&quot;));
+      
+       // MessageBox.Show(body123);
+
+    
+      
+      
+      
+      if ( 0 != ToInt32(Report.GetParameterValue(&quot;P_IMPUTEDTAX&quot;)) )
+      { // без учета налогов: выводим только полные суммы
+        
+        Page1.Landscape = false; // отчет будет в формате &quot;Портрет&quot;
+    
+        GroupHeaderTax.Visible = false;
+        GroupFooterTax.Visible = false;
+        DataHeaderOp.Visible = false;
+        DataOp.Visible = false;
+        
+        Single pixelDiff = ColumnHeadNSP.Width + ColumnHeadSumNoNSP.Width / 2;
+      
+        ColumnHeadNSP.Width = 0;
+        ColumnHeadSumNoNSP.Width = 0;
+        ColumnHeadVAT.Width = 0;
+        ColumnHeadSumNoVAT.Width = 0;
+        ColumnHeadCPNoVAT.Width = 0;
+
+        mTextNSP.Visible = false;
+        mTextSumNoNSP.Visible = false;
+        mTextVAT.Visible = false;
+        mTextSumNoVAT.Visible = false;
+        mTextCPNoVAT.Visible = false;
+                                  
+        mTextNSPSale.Visible = false;
+        mTextSumNoNSPSale.Visible = false;
+        mTextVATSale.Visible = false;
+        mTextSumNoVATSale.Visible = false;
+        mTextCPNoVATSale.Visible = false;
+    
+        mTextNSPRet.Visible = false;
+        mTextSumNoNSPRet.Visible = false;
+        mTextVATRet.Visible = false;
+        mTextSumNoVATRet.Visible = false;
+        mTextCPNoVATRet.Visible = false;
+
+        mTextNSPRep.Visible = false;
+        mTextSumNoNSPRep.Visible = false;
+        mTextVATRep.Visible = false;
+        mTextSumNoVATRep.Visible = false;
+        mTextCPNoVATRep.Visible = false;
+        
+        ColumnHeadOp.Width += pixelDiff;
+
+        TextOp.Width = ColumnHeadOp.Width;
+        TextFooterRep.Width = TextOp.Width;
+        TextSale.Width = TextOp.Width;
+        TextRet.Width = TextOp.Width;
+        TextRep.Width = TextOp.Width;
+        TextHeaderCredCards.Width = TextOp.Width;
+        TextCredCards.Width = TextOp.Width;
+        
+        mTextSum.Left = TextOp.Right;
+        mTextCP.Left = mTextSum.Right;
+        mTextProfit.Left = mTextCP.Right;
+   
+        mTextSumSale.Left = mTextSum.Left;
+        mTextCPSale.Left = mTextCP.Left;
+        mTextProfitSale.Left = mTextProfit.Left;
+        
+        mTextSumRet.Left = mTextSum.Left;
+        mTextCPRet.Left = mTextCP.Left;
+        mTextProfitRet.Left = mTextProfit.Left;
+        
+        mTextSumRep.Left = mTextSum.Left;
+        mTextCPRep.Left = mTextCP.Left;
+        mTextProfitRep.Left = mTextProfit.Left;
+
+        mTextCredCardSumItogo.Left = TextHeaderCredCards.Right;
+        mTextCredCardSum.Left = mTextCredCardSumItogo.Left;
+        
+        // уменьшаем ширину всех заголовков
+        TextReport.Width = ColumnHeadOp.Width + ColumnHeadSum.Width + ColumnHeadCP.Width + ColumnHeadProfit.Width;
+        TextReport1.Width = TextReport.Width;
+  
+        TextDateTransfer.Left = TextReport.Right - TextDateTransfer.Width;
+        TextDateTransfer1.Left = TextDateTransfer.Left;
+        
+        txtSurname.Width = TextReport.Right - txtPrintDate.Right;
+        TextPageTitle.Text += &quot;\r\n&quot; + TextPageTitle1.Text;
+        TextPageTitle.Width = TextDateTransfer.Left - TextPageTitle.Left;
+        TextPageTitle1.Visible = false;
+        }
+
+        
+    }
+
+    private void DataFooter_BeforePrint(object sender, EventArgs e)
+    {
+    // данные по видам кредитных карт для продаж
+    string sSQL = &quot;SELECT nvl(sum(c.TotalSum),0)&quot;+
+        &quot; FROM supermag.TTCashDocCredCard c&quot;+ 
+        &quot; WHERE c.DocType='CS'&quot;;
+      decSumFullCredCards = RepOracleRunner.ExecuteScalar&lt;decimal&gt;(host.Connection, sSQL);
+      if (0 == decSumFullCredCards)
+        SubreportSale.Visible = false;
+      else
+      {
+        sSQL = &quot;SELECT&quot;+
+          &quot; c.Title CredCardName&quot;+
+          &quot;,sum(c.TotalSum) FullSum&quot;+
+          &quot; FROM supermag.TTCashDocCredCard c&quot;+ 
+          &quot; WHERE c.DocType='CS'&quot;+
+          &quot; GROUP BY c.Title&quot;+
+          &quot; ORDER BY 1&quot;;
+        host.TableDataSourcePreInit(&quot;CredCardData&quot;, sSQL); 
+      }
+    }
+
+    private void DataFooterRet_BeforePrint(object sender, EventArgs e)
+    {    
+      // данные по видам кредитных карт для возвратов
+      string sSQL = &quot;SELECT nvl(sum(-c.TotalSum),0)&quot;+
+        &quot; FROM supermag.TTCashDocCredCard c&quot;+ 
+        &quot; WHERE c.DocType='CR'&quot;;
+      decSumFullCredCards = RepOracleRunner.ExecuteScalar&lt;decimal&gt;(host.Connection, sSQL);
+      if (0 == decSumFullCredCards)
+        SubreportRet.Visible = false;
+      else
+      {
+        sSQL = &quot;SELECT&quot;+
+          &quot; c.Title CredCardName&quot;+
+          &quot;,sum(-c.TotalSum) FullSum&quot;+
+          &quot; FROM supermag.TTCashDocCredCard c&quot;+ 
+          &quot; WHERE c.DocType='CR'&quot;+
+          &quot; GROUP BY c.Title&quot;+
+          &quot; ORDER BY 1&quot;;
+        host.TableDataSourcePreInit(&quot;CredCardData&quot;, sSQL); 
+      }
+    }
+
+    private void DataFooterRep_BeforePrint(object sender, EventArgs e)
+    {    
+      // данные по видам кредитных карт итоговые
+      string sSQL = &quot;SELECT nvl(sum(decode(c.DocType,'CS', c.TotalSum, -c.TotalSum)),0)&quot;+
+        &quot; FROM supermag.TTCashDocCredCard c&quot;;
+      decSumFullCredCards = RepOracleRunner.ExecuteScalar&lt;decimal&gt;(host.Connection, sSQL);
+      if (0 == decSumFullCredCards)
+        SubreportRep.Visible = false;
+      else
+      {
+        sSQL = &quot;SELECT&quot;+
+          &quot; c.Title CredCardName&quot;+
+          &quot;,sum(decode(c.DocType,'CS', c.TotalSum, -c.TotalSum)) FullSum&quot;+
+          &quot; FROM supermag.TTCashDocCredCard c&quot;+ 
+          &quot; GROUP BY c.Title&quot;+
+          &quot; ORDER BY 1&quot;;
+        host.TableDataSourcePreInit(&quot;CredCardData&quot;, sSQL);
+    
+		}
+    }
+	public static OracleConnection GetDBConnection(string host, int port, String sid, String user, String password)
+        {
+
+            // 'Connection String' подключается напрямую к Oracle.
+            string connString = "Data Source=(DESCRIPTION =(ADDRESS = (PROTOCOL = TCP)(HOST = "
+                 + host + ")(PORT = " + port + "))(CONNECT_DATA = (SERVER = DEDICATED)(SERVICE_NAME = "
+                 + sid + ")));Password=" + password + ";User ID=" + user;
+            OracleConnection conn = new OracleConnection();
+            conn.ConnectionString = connString;
+            return conn;
+        }
+	private struct Certificate
+			{
+				public double CertificateSale;
+				public double CertificateBuy;
+				public double CertificateSaleNDS;
+				public double CertificateBuyNDS;
+			}
+			
+	private Certificate SaleCert(int OPCODE)
+        {
+			//MessageBox.Show("Создаем сертификат");
+			string sFirstDate = ToString(Report.GetParameterValue("P_FIRSTDATE"));
+			string sLastDate = ToString(Report.GetParameterValue("P_LASTDATE"));
+			//MessageBox.Show(sFirstDate.ToString());
+			//MessageBox.Show(sLastDate.ToString());
+            Certificate certificate = new Certificate()
+            {
+                CertificateBuy = 0,
+                CertificateBuyNDS = 0,
+                CertificateSale = 0,
+                CertificateSaleNDS = 0
+            };
+            using (OracleConnection conn = GetDBConnection("172.16.1.188", 1521, "DBMYS4", "supermag", "qqq"))
+            {
+                try
+                {
+                    conn.Open();
+                    OracleCommand cmd = conn.CreateCommand();
+                    
+                    //Ищем номер смены по дате.
+                    int ZNUM;
+                    cmd.CommandText = 
+                        "SELECT MAX(ZNUM) FROM SMCASHCHECKS " +
+                        "WHERE (PRINTTIME >= TO_DATE('" + sFirstDate + "', 'DD.MM.YYYY') AND " +
+                        "PRINTTIME <= TO_DATE('" + Convert.ToDateTime(sLastDate).AddDays(1).ToShortDateString() + "', 'DD.MM.YYYY')) " +
+                        "AND rownum = 1";
+					//MessageBox.Show(cmd.CommandText);
+                    cmd = new OracleCommand(cmd.CommandText, conn);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.HasRows)
+                        {
+                            reader.Read();
+                            ZNUM = reader.GetInt32(0);
+                        }
+                        else
+                        {
+                            ZNUM = 0;
+                        }
+                    }
+					//MessageBox.Show(ZNUM.ToString());
+                    //Ищем все чеки с артикулом 007149 (СЕРТИФИКАТ) и ссумируем TOTALSUM чеков
+                    string ARTICLE = "007149";
+                    double TOTALSUM = 0;
+                    cmd.CommandText =
+                        "SELECT SMCASHCHECKS.TOTALSUM FROM SMCASHCHECKITEMS " +
+                        "LEFT JOIN SMCASHCHECKS ON SMCASHCHECKITEMS.ZNUM = SMCASHCHECKS.ZNUM AND SMCASHCHECKITEMS.CHECKNUM = SMCASHCHECKS.CHECKNUM " +
+                        "WHERE SMCASHCHECKITEMS.ZNUM = " + ZNUM + " AND " +
+                        "ARTICLE = '" + ARTICLE + "' AND " +
+                        "SMCASHCHECKS.OPCODE = " + OPCODE + " " +
+                        "GROUP BY SMCASHCHECKITEMS.CHECKNUM, SMCASHCHECKS.TOTALSUM " +
+                        "ORDER BY SMCASHCHECKITEMS.CHECKNUM DESC";
+					//MessageBox.Show(cmd.CommandText);
+                    cmd = new OracleCommand(cmd.CommandText, conn);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.HasRows)
+                        {
+                            while (reader.Read())
+                            {
+                                TOTALSUM += reader.GetDouble(0);
+                            }
+                        }
+                    }
+					//MessageBox.Show(TOTALSUM.ToString());
+                    certificate.CertificateBuy = Math.Round(TOTALSUM == 0 ? 0 : TOTALSUM, 2);
+                    certificate.CertificateBuyNDS = Math.Round(TOTALSUM == 0 ? 0 : TOTALSUM * 20 / 120, 2);
+                }
+                finally
+                {
+                    conn.Close();
+                    conn.Dispose();
+                }
+
+            }
+            return certificate;
+        }
+		
+		
+    private void ReportSummary_BeforePrint(object sender, EventArgs e)
+    {
+		if ( 0 != ToInt32(Report.GetParameterValue(&quot;P_VAT_PAID_VIEW&quot;)) )
+		  { // сумма НДС к уплате
+			decVATNoPaid = (decimal)Report.GetTotalValue(&quot;SumVATRep&quot;) - decVATPaid;
+		}
+		//MessageBox.Show("Начинаем");
+		
+		Certificate certificate;
+		Certificate certificateBuy = SaleCert(1);
+		Certificate certificateReturn = SaleCert(3);
+
+		certificate = new Certificate()
+		{
+			CertificateBuy = certificateBuy.CertificateBuy - certificateReturn.CertificateBuy,
+			CertificateBuyNDS = certificateBuy.CertificateBuyNDS - certificateReturn.CertificateBuyNDS,
+			CertificateSale = 0,
+			CertificateSaleNDS = 0
+		};
+		//excelPath = dirPath + "tovreport_tax.xls";
+		nds20120 = Convert.ToString(certificate.CertificateBuyNDS);
+		real20120 = Convert.ToString(certificate.CertificateBuy);
+		//MessageBox.Show(nds20);
+		//MessageBox.Show(real20);
+    }
+
+    }
+    }
+  </ScriptText>
+  <Dictionary>
+    <SupermagFastReportConnection Name="Connection" LoginPrompt="true">
+      <TableDataSource Name="Table2" Alias="RepData" DataType="System.Int32" Enabled="true" SelectCommand="select &#13;&#10; m.TaxGroupID&#13;&#10;,supermag.RepTools.RepString(11,to_char(m.TaxGroupID)) TaxGroupTitle&#13;&#10;,o.name||' '||u.title||' - '&#13;&#10;||decode(m.PayCash,'0','безнал.','нал.')||' - '&#13;&#10;||decode(m.DocType,'CS','касса','CR','касса','док.') OpName&#13;&#10;,decode(o.ExpenseType,1,m.DocSumFull,-m.DocSumFull) SumFull&#13;&#10;,decode(o.ExpenseType,1,m.NSPSum,-m.NSPSum) SumNSP&#13;&#10;,decode(o.ExpenseType,1,m.NoNSPSum,-m.NoNSPSum) SumNoNSP&#13;&#10;,decode(o.ExpenseType,1,m.VATSum,-m.VATSum) SumVAT&#13;&#10;,decode(o.ExpenseType,1,m.NoVATSum,-m.NoVATSum) SumNoVAT&#13;&#10;,decode(o.ExpenseType,1,m.CPNoVAT,-m.CPNoVAT) CPNoVAT&#13;&#10;,decode(o.ExpenseType,1,m.CPFull,-m.CPFull) CPFull&#13;&#10;,decode(o.ExpenseType,1,m.Profit,-m.Profit) Profit&#13;&#10;,decode(o.ExpenseType,1,m.DocSumFull,0) SumFullSale&#13;&#10;,decode(o.ExpenseType,1,m.NSPSum,0) SumNSPSale&#13;&#10;,decode(o.ExpenseType,1,m.NoNSPSum,0) SumNoNSPSale&#13;&#10;,decode(o.ExpenseType,1,m.VATSum,0) SumVATSale&#13;&#10;,decode(o.ExpenseType,1,m.NoVATSum,0) SumNoVATSale&#13;&#10;,decode(o.ExpenseType,1,m.CPNoVAT,0) CPNoVATSale&#13;&#10;,decode(o.ExpenseType,1,m.CPFull,0) CPFullSale&#13;&#10;,decode(o.ExpenseType,1,m.Profit,0) ProfitSale&#13;&#10;,decode(o.ExpenseType,1,0,-m.DocSumFull) SumFullRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.NSPSum) SumNSPRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.NoNSPSum) SumNoNSPRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.VATSum) SumVATRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.NoVATSum) SumNoVATRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.CPNoVAT) CPNoVATRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.CPFull) CPFullRet&#13;&#10;,decode(o.ExpenseType,1,0,-m.Profit) ProfitRet&#13;&#10;from supermag.TTTovReportData m, supermag.saoperation o, supermag.smuserop u&#13;&#10;where m.OpCode = o.id&#13;&#10;and m.UserOp = u.id(+)&#13;&#10;order by 1,3">
+        <Column Name="TAXGROUPID" DataType="System.Decimal"/>
+        <Column Name="TAXGROUPTITLE" DataType="System.String"/>
+        <Column Name="OPNAME" DataType="System.String"/>
+        <Column Name="SUMFULL" DataType="System.Decimal"/>
+        <Column Name="SUMNSP" DataType="System.Decimal"/>
+        <Column Name="SUMNONSP" DataType="System.Decimal"/>
+        <Column Name="SUMVAT" DataType="System.Decimal"/>
+        <Column Name="SUMNOVAT" DataType="System.Decimal"/>
+        <Column Name="CPNOVAT" DataType="System.Decimal"/>
+        <Column Name="CPFULL" DataType="System.Decimal"/>
+        <Column Name="PROFIT" DataType="System.Decimal"/>
+        <Column Name="SUMFULLSALE" DataType="System.Decimal"/>
+        <Column Name="SUMNSPSALE" DataType="System.Decimal"/>
+        <Column Name="SUMNONSPSALE" DataType="System.Decimal"/>
+        <Column Name="SUMVATSALE" DataType="System.Decimal"/>
+        <Column Name="SUMNOVATSALE" DataType="System.Decimal"/>
+        <Column Name="CPNOVATSALE" DataType="System.Decimal"/>
+        <Column Name="CPFULLSALE" DataType="System.Decimal"/>
+        <Column Name="PROFITSALE" DataType="System.Decimal"/>
+        <Column Name="SUMFULLRET" DataType="System.Decimal"/>
+        <Column Name="SUMNSPRET" DataType="System.Decimal"/>
+        <Column Name="SUMNONSPRET" DataType="System.Decimal"/>
+        <Column Name="SUMVATRET" DataType="System.Decimal"/>
+        <Column Name="SUMNOVATRET" DataType="System.Decimal"/>
+        <Column Name="CPNOVATRET" DataType="System.Decimal"/>
+        <Column Name="CPFULLRET" DataType="System.Decimal"/>
+        <Column Name="PROFITRET" DataType="System.Decimal"/>
+      </TableDataSource>
+      <TableDataSource Name="Table" Alias="CredCardData" DataType="System.Int32" Enabled="true" ForceLoadData="true" SelectCommand="select&#13;&#10;'' CredCardName&#13;&#10;,0 FullSum&#13;&#10;from dual where 0&lt;&gt;0">
+        <Column Name="CREDCARDNAME" DataType="System.String"/>
+        <Column Name="FULLSUM" DataType="System.Decimal"/>
+      </TableDataSource>
+	  <TableDataSource Name="TableSert" Alias="SertData" DataType="System.Int32" Enabled="true" ForceLoadData="false" SelectCommand="select '[real20120]' as SUMM, '[nds20120]' as NDS FROM dual WHERE rownum = 1">
+        <Column Name="SUMM" DataType="System.String"/>
+        <Column Name="NDS" DataType="System.String"/>
+      </TableDataSource>
+      <TableDataSource Name="Table1" Alias="RepOp" DataType="System.Int32" Enabled="true" ForceLoadData="true" SelectCommand="select &#13;&#10;o.name||' '||u.title||' - '&#13;&#10;||decode(m.PayCash,'0','безнал.','нал.')||' - '&#13;&#10;||decode(m.DocType,'CS','касса','CR','касса','док.') OpName&#13;&#10;,sum(decode(o.ExpenseType,1,m.DocSumFull,-m.DocSumFull)) SumFull&#13;&#10;,sum(decode(o.ExpenseType,1,m.NSPSum,-m.NSPSum)) SumNSP&#13;&#10;,sum(decode(o.ExpenseType,1,m.NoNSPSum,-m.NoNSPSum)) SumNoNSP&#13;&#10;,sum(decode(o.ExpenseType,1,m.VATSum,-m.VATSum)) SumVAT&#13;&#10;,sum(decode(o.ExpenseType,1,m.NoVATSum,-m.NoVATSum)) SumNoVAT&#13;&#10;,sum(decode(o.ExpenseType,1,m.CPNoVAT,-m.CPNoVAT)) CPNoVAT&#13;&#10;,sum(decode(o.ExpenseType,1,m.CPFull,-m.CPFull)) CPFull&#13;&#10;,sum(decode(o.ExpenseType,1,m.Profit,-m.Profit)) Profit&#13;&#10;from supermag.TTTovReportData m, supermag.saoperation o, supermag.smuserop u&#13;&#10;where m.OpCode = o.id&#13;&#10;and m.UserOp = u.id(+)&#13;&#10;group by o.name||' '||u.title||' - '&#13;&#10;||decode(m.PayCash,'0','безнал.','нал.')||' - '&#13;&#10;||decode(m.DocType,'CS','касса','CR','касса','док.')&#13;&#10;order by 1">
+        <Column Name="OPNAME" DataType="System.String"/>
+        <Column Name="SUMFULL" DataType="System.Decimal"/>
+        <Column Name="SUMNSP" DataType="System.Decimal"/>
+        <Column Name="SUMNONSP" DataType="System.Decimal"/>
+        <Column Name="SUMVAT" DataType="System.Decimal"/>
+        <Column Name="SUMNOVAT" DataType="System.Decimal"/>
+        <Column Name="CPNOVAT" DataType="System.Decimal"/>
+        <Column Name="CPFULL" DataType="System.Decimal"/>
+        <Column Name="PROFIT" DataType="System.Decimal"/>
+      </TableDataSource>
+    </SupermagFastReportConnection>
+    <Relation Name="DocSpec_DocSpecScale" ParentDataSource="Table2" ChildDataSource="null" ParentColumns="SPECITEM" ChildColumns="SPECITEM" Enabled="true"/>
+    <Relation Name="Table2_Table8" ParentDataSource="Table2" ChildDataSource="null" ParentColumns="SPECITEM" ChildColumns="SPECITEM" Enabled="true"/>
+    <Relation Name="Table2_Table5" ParentDataSource="Table2" ChildDataSource="null" ParentColumns="SPECITEM" ChildColumns="SPECITEM" Enabled="true"/>
+    <Parameter Name="P_SURNAME" DataType="System.String"/>
+    <Parameter Name="P_FIRSTDATE" DataType="System.String"/>
+    <Parameter Name="P_LASTDATE" DataType="System.String"/>
+    <Parameter Name="P_USER_ID" DataType="System.Int32"/>
+    <Parameter Name="P_STORED_ALL" DataType="System.Int32"/>
+    <Parameter Name="P_PARTNER" DataType="System.Int32"/>
+    <Parameter Name="P_BGROUP" DataType="System.Int32"/>
+    <Parameter Name="P_GROUP_ALL" DataType="System.Int32"/>
+    <Parameter Name="P_GROUP_TREE" DataType="System.String"/>
+    <Parameter Name="P_STORED_NAME" DataType="System.String"/>
+    <Parameter Name="P_RGNID" DataType="System.Int32"/>
+    <Parameter Name="P_VAT_PAID_VIEW" DataType="System.Int32"/>
+    <Parameter Name="P_RUBNAME" DataType="System.String"/>
+    <Parameter Name="P_IMPUTEDTAX" DataType="System.Int32"/>
+    <Parameter Name="P_WITHMONEY" DataType="System.Int32" Expression="0"/>
+    <Total Name="SumFullTax" Expression="[RepData.SUMFULL]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="SumNSPTax" Expression="[RepData.SUMNSP]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoNSPTax" Expression="[RepData.SUMNONSP]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="SumVATTax" Expression="[RepData.SUMVAT]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoVATTax" Expression="[RepData.SUMNOVAT]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="CPNoVATTax" Expression="[RepData.CPNOVAT]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="CPFullTax" Expression="[RepData.CPFULL]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="ProfitTax" Expression="[RepData.PROFIT]" Evaluator="DataSpec" PrintOn="GroupFooterTax" IncludeInvisibleRows="true"/>
+    <Total Name="SumFullRep" Expression="[RepData.SUMFULL]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNSPRep" Expression="[RepData.SUMNSP]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoNSPRep" Expression="[RepData.SUMNONSP]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumVATRep" Expression="[RepData.SUMVAT]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoVATRep" Expression="[RepData.SUMNOVAT]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPNoVATRep" Expression="[RepData.CPNOVAT]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPFullRep" Expression="[RepData.CPFULL]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="ProfitRep" Expression="[RepData.PROFIT]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumFullSaleRep" Expression="[RepData.SUMFULLSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNSPSaleRep" Expression="[RepData.SUMNSPSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoNSPSaleRep" Expression="[RepData.SUMNONSPSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumVATSaleRep" Expression="[RepData.SUMVATSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoVATSaleRep" Expression="[RepData.SUMNOVATSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPNoVATSaleRep" Expression="[RepData.CPNOVATSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPFullSaleRep" Expression="[RepData.CPFULLSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="ProfitSaleRep" Expression="[RepData.PROFITSALE]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumFullRetRep" Expression="[RepData.SUMFULLRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNSPRetRep" Expression="[RepData.SUMNSPRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoNSPRetRep" Expression="[RepData.SUMNONSPRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumVATRetRep" Expression="[RepData.SUMVATRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="SumNoVATRetRep" Expression="[RepData.SUMNOVATRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPNoVATRetRep" Expression="[RepData.CPNOVATRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="CPFullRetRep" Expression="[RepData.CPFULLRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+    <Total Name="ProfitRetRep" Expression="[RepData.PROFITRET]" Evaluator="DataSpec" PrintOn="DataFooter" ResetAfterPrint="false" IncludeInvisibleRows="true"/>
+  </Dictionary>
+ 
+  <ReportPage Name="Page1" Landscape="true" PaperWidth="297" PaperHeight="210" RawPaperSize="9" FirstPageSource="15" OtherPagesSource="15" Fill.Color="White" TitleBeforeHeader="false">
+    <PageHeaderBand Name="PageHeader" Width="1047.06" Height="15.12" CanGrow="true">
+      <TextObject Name="txtSurname" Left="604.8" Width="438.48" Height="15.12" CanGrow="true" CanBreak="false" Text="[P_SURNAME]" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="txtPrintDate" Left="415.8" Width="189" Height="15.12" Text="Дата печати: [Format(&quot;{0:dd.MM.yy HH:mm}&quot;, [Date])]" Padding="0, 0, 2, 0" Font="Arial, 8pt"/>
+      <TextObject Name="txtUserName" Width="415.8" Height="15.12" CanGrow="true" CanBreak="false" Text="[sUserName]" Font="Arial, 8pt"/>
+    </PageHeaderBand>
+    <ReportTitleBand Name="ReportTitle" Top="17.9" Width="1047.06" Height="86.94" CanGrow="true">
+      <TextObject Name="TextReport1" Top="29.32" Width="1043.28" Height="56.7" CanGrow="true" CanBreak="false" Text="[sDateName]&#13;&#10;[sLocName]&#13;&#10;[sGroupName]&#13;&#10;[sCardTypeName]" Padding="2, 2, 2, 2" HorzAlign="Center" VertAlign="Bottom"/>
+      <TextObject Name="TextReport" Top="3.78" Width="1043.28" Height="26.46" CanBreak="false" Text="[sRepName]" Padding="2, 2, 2, 0" HorzAlign="Center" Font="Arial, 12pt, style=Bold"/>
+    </ReportTitleBand>
+    <ColumnHeaderBand Name="ColumnHeader1" Top="107.62" Width="1047.06" Height="26.46" PrintOn="FirstPage">
+      <TextObject Name="TextDateTransfer" Left="831.6" Width="211.68" Height="26.46" CanGrow="true" CanBreak="false" Text="[sDateTransfer]" Padding="0, 0, 2, 0" WordWrap="false" Font="Arial, 8pt"/>
+      
+	  <ChildBand Name="Child2" Top="136.85" Width="1047.06" Height="37.8" CanGrow="true" PrintOn="LastPage, OddPages, EvenPages, RepeatedBand">
+        <TextObject Name="txtPage" Width="94.5" Height="15.12" CanBreak="false" Text="Лист [Page#] из [TotalPages#]" WordWrap="false" Font="Arial, 8pt"/>
+        <TextObject Name="TextPageTitle" Left="98.28" Width="257.04" Height="37.8" CanGrow="true" CanBreak="false" Text="[sRepName]&#13;&#10;[sDateName]&#13;&#10;[sGroupName]" Padding="0, 0, 2, 0" Font="Arial, 8pt"/>
+        <TextObject Name="TextPageTitle1" Left="355.32" Width="476.28" Height="37.8" CanGrow="true" ShiftMode="WhenOverlapped" CanBreak="false" Text="[sLocName]&#13;&#10;[sCardTypeName]" Padding="0, 0, 2, 0" Font="Arial, 8pt"/>
+        <TextObject Name="TextDateTransfer1" Left="831.6" Width="211.68" Height="26.46" CanGrow="true" CanBreak="false" Text="[sDateTransfer]" Padding="0, 0, 2, 0" WordWrap="false" Font="Arial, 8pt"/>
+        <ChildBand Name="Child3" Top="177.43" Width="1047.06" Height="45.36">
+          <TableObject Name="TableHeaderSpec" Width="1043.28" Height="45.36" Border.Lines="All" Border.Width="0.3" GrowToBottom="true">
+            <TableColumn Name="ColumnHeadOp" Width="226.8"/>
+            <TableColumn Name="ColumnHeadSum" Width="102.06"/>
+            <TableColumn Name="ColumnHeadCP" Width="102.06"/>
+            <TableColumn Name="ColumnHeadNSP" Width="102.06"/>
+            <TableColumn Name="ColumnHeadSumNoNSP" Width="102.06"/>
+            <TableColumn Name="ColumnHeadVAT" Width="102.06"/>
+            <TableColumn Name="ColumnHeadSumNoVAT" Width="102.06"/>
+            <TableColumn Name="ColumnHeadCPNoVAT" Width="102.06"/>
+            <TableColumn Name="ColumnHeadProfit" Width="102.06"/>
+            <TableRow Name="RowHeaderSpec1" Height="45.36">
+              <TableCell Name="CellHeadNu" Border.Lines="Right" Border.Width="0.3" Text="Операция" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="CellHeadArticle" Border.Lines="Right, Bottom" Border.Width="0.3" Text="Реализация,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="CellHeadName" Border.Lines="Right" Border.Width="0.3" Text="Себестоимость,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="CellHeadMeas" Border.Lines="Right" Border.Width="0.3" Text="НсП,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="CellHeadQty" Border.Lines="Right" Border.Width="0.3" Text="Реализация&#13;&#10;без НсП,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="CellHeadPrice" Border.Lines="Right" Border.Width="0.3" Text="НДС,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="Cell9" Border.Lines="Right" Border.Width="0.3" Text="Реализация&#13;&#10;без НДС,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="Cell10" Border.Lines="Right" Border.Width="0.3" Text="Себестоимость&#13;&#10;без НДС,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+              <TableCell Name="Cell4" Border.Lines="Right" Border.Width="0.3" Text="Прибыль,&#13;&#10;[P_RUBNAME]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+            </TableRow>
+          </TableObject>
+        </ChildBand>
+      </ChildBand>
+	  
+    </ColumnHeaderBand>
+	
+	
+	 
+    <GroupHeaderBand Name="GroupHeaderTax" Top="225.57" Width="1047.06" Height="26.46" CanGrow="true" KeepWithData="true" Condition="[RepData.TAXGROUPID]" SortOrder="None">
+      <TextObject Name="Text1" Top="3.78" Width="1043.28" Height="22.68" CanGrow="true" CanBreak="false" Text="[RepData.TAXGROUPTITLE]" VertAlign="Center" Font="Arial, 12pt, style=Bold"/>
+      
+	  <DataBand Name="DataSpec" Top="254.81" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" DataSource="Table2" PrintIfDetailEmpty="true">
+        <TextObject Name="mTextVAT" Left="635.04" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.SUMVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextNSP" Left="430.92" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.SUMNSP]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="TextOp" Width="226.8" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.OPNAME]" Padding="4, 5, 0, 0" Font="Arial, 8pt"/>
+        <TextObject Name="mTextSumNoNSP" Left="532.98" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[RepData.SUMNONSP]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextCP" Left="328.86" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.CPFULL]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextSum" Left="226.8" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.SUMFULL]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextSumNoVAT" Left="737.1" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.SUMNOVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextCPNoVAT" Left="839.16" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.CPNOVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextProfit" Left="941.22" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepData.PROFIT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      </DataBand>
+      <GroupFooterBand Name="GroupFooterTax" Top="276.48" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" BeforePrintEvent="GroupFooterLoc_BeforePrint">
+        <TextObject Name="mTextVATSumLoc" Left="635.04" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumVATTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextNoTaxSumLoc" Left="430.92" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNSPTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextVATRateLoc" Left="532.98" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[SumNoNSPTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="TextFooterLoc" Width="226.8" Height="18.9" Border.Lines="Left, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="Итого:" Padding="4, 5, 0, 0" Font="Arial, 8pt, style=Bold"/>
+        <TextObject Name="mTextDiscSumLoc" Left="941.22" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[ProfitTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextDiscDocSumLoc" Left="839.16" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CPNoVATTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextFullSumLoc" Left="737.1" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoVATTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mText116" Left="328.86" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CPFullTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mText117" Left="226.8" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumFullTax]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/> 
+ </GroupFooterBand>
+      <DataFooterBand Name="DataFooter" Top="298.16" Width="1047.06" Height="56.7" CanGrow="true" CanShrink="true" BeforePrintEvent="DataFooter_BeforePrint">
+        <TextObject Name="mTextSumSale" Left="226.8" Width="102.06" Height="37.8" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumFullSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextCPSale" Left="328.86" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[CPFullSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextVATSale" Left="635.04" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumVATSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextSumNoVATSale" Left="737.1" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoVATSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextCPNoVATSale" Left="839.16" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CPNoVATSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextProfitSale" Left="941.22" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[ProfitSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextNSPSale" Left="430.92" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNSPSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextSumNoNSPSale" Left="532.98" Width="102.06" Height="37.8" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoNSPSaleRep]" Padding="0, 23, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <SubreportObject Name="SubreportSale" Top="37.8" Width="1043.28" Height="18.9" ReportPage="Page4" PrintOnParent="true"/>
+        <TextObject Name="TextFooterRep" Width="226.8" Height="18.9" Border.Lines="Left, Right, Top" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="Итого по отчету" Padding="4, 5, 0, 0" Font="Arial, 8pt, style=Bold"/>
+        <TextObject Name="TextSale" Top="18.9" Width="226.8" Height="18.9" Border.Lines="Left, Right" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="продажи:" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+        <ChildBand Name="DataFooterRet" Top="357.64" Width="1047.06" Height="37.8" CanGrow="true" CanShrink="true" BeforePrintEvent="DataFooterRet_BeforePrint">
+          <TextObject Name="TextRet" Width="226.8" Height="18.9" Border.Lines="Left, Right" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="возвраты:" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+          <TextObject Name="mTextSumRet" Left="226.8" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumFullRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextCPRet" Left="328.86" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[CPFullRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextVATRet" Left="635.04" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumVATRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextSumNoVATRet" Left="737.1" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoVATRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextCPNoVATRet" Left="839.16" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CPNoVATRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextProfitRet" Left="941.22" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[ProfitRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextNSPRet" Left="430.92" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNSPRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <TextObject Name="mTextSumNoNSPRet" Left="532.98" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoNSPRetRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+          <SubreportObject Name="SubreportRet" Top="18.9" Width="1043.28" Height="18.9" ReportPage="Page4" PrintOnParent="true"/>
+          <ChildBand Name="DataFooterRep" Top="398.22" Width="1047.06" Height="37.8" CanGrow="true" CanShrink="true" BeforePrintEvent="DataFooterRep_BeforePrint">
+            <TextObject Name="TextRep" Width="226.8" Height="18.9" Border.Lines="Left, Right, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="всего:" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+            <TextObject Name="mTextSumRep" Left="226.8" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumFullRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextCPRep" Left="328.86" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[CPFullRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextVATRep" Left="635.04" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumVATRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextSumNoVATRep" Left="737.1" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoVATRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextCPNoVATRep" Left="839.16" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CPNoVATRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextProfitRep" Left="941.22" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[ProfitRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextNSPRep" Left="430.92" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNSPRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <TextObject Name="mTextSumNoNSPRep" Left="532.98" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[SumNoNSPRep]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+            <SubreportObject Name="SubreportRep" Top="18.9" Width="1043.28" Height="18.9" ReportPage="Page4" PrintOnParent="true"/>
+          </ChildBand>
+        </ChildBand>
+      </DataFooterBand>
+    </GroupHeaderBand>
+	
+	
+	
+   
+    <DataBand Name="DataOp" Top="460.47" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" DataSource="Table1">
+		
+      <TextObject Name="mText183" Left="328.86" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.CPFULL]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText184" Left="226.8" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[RepOp.SUMFULL]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText185" Left="430.92" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.SUMNSP]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText186" Left="532.98" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.SUMNONSP]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText187" Left="737.1" Width="102.06" Height="18.9" Border.Lines="Right, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.SUMNOVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText188" Left="635.04" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[RepOp.SUMVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText189" Left="839.16" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.CPNOVAT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText190" Left="941.22" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.PROFIT]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="Text182" Width="226.8" Height="18.9" Border.Lines="Left, Top, Bottom" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[RepOp.OPNAME]" Padding="4, 5, 0, 0" Font="Arial, 8pt"/>
+      
+	 <DataHeaderBand Name="DataHeaderOp" Top="438.8" Width="1047.06" Height="18.9" KeepWithData="true">
+        
+        <TextObject Name="Text119" Width="1043.28" Height="18.9" CanBreak="false" Text="Итого по операциям" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+		
+      </DataHeaderBand>
+    </DataBand>
+    <ReportSummaryBand Name="ReportSummary" Top="482.15" Width="1047.06" Height="37.8" CanGrow="true" CanShrink="true" BeforePrintEvent="ReportSummary_BeforePrint">
+      <TextObject Name="mText1831" Left="635.04" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[decVATPaid]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mText1841" Left="635.04" Top="18.9" Width="102.06" Height="18.9" Border.Lines="All" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="[decVATNoPaid]" Padding="0, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="Text183" Width="635.04" Height="18.9" Border.Lines="Left, Right, Top" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="НДС к зачету:" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+      <TextObject Name="Text184" Top="18.9" Width="635.04" Height="18.9" Border.Lines="Left, Right, Bottom" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Text="НДС к уплате:" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+      <TextObject Name="Text185" Left="737.1" Width="306.18" Height="37.8" Border.Lines="All" Border.Width="0.3" GrowToBottom="true" CanBreak="false" Padding="4, 5, 2, 0" HorzAlign="Right" Font="Arial, 8pt, style=Bold"/>
+    </ReportSummaryBand>
+	
+  </ReportPage>
+  
+  
+ 
+  
+  
+  <ReportPage Name="Page4" Landscape="true" PaperWidth="297" PaperHeight="210">
+  
+    <DataBand Name="DataDisc" Top="22.35" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" DataSource="Table">
+      <TextObject Name="TextCredCards" Width="226.8" Height="18.9" Border.Lines="Left" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CredCardData.CREDCARDNAME]" Padding="4, 4, 4, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <TextObject Name="mTextCredCardSum" Left="226.8" Width="102.06" Height="18.9" Border.Lines="Left, Right" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[CredCardData.FULLSUM]" Padding="0, 4, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      <LineObject Name="Line9" Left="1043.28" Height="18.9" Border.Width="0.3" GrowToBottom="true"/>
+      <DataHeaderBand Name="DataHeaderDisc" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" KeepWithData="true">
+        <TextObject Name="TextHeaderCredCards" Width="226.8" Height="18.9" Border.Lines="Left" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="в т.ч. по системам безналичной оплаты:" Padding="4, 4, 4, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+        <TextObject Name="mTextCredCardSumItogo" Left="226.8" Width="102.06" Height="18.9" Border.Lines="Left, Right" Border.Width="0.3" CanGrow="true" GrowToBottom="true" CanBreak="false" Text="[decSumFullCredCards]" Padding="0, 4, 2, 0" HorzAlign="Right" Font="Arial, 8pt"/>
+      </DataHeaderBand>
+    </DataBand>
+	 
+  </ReportPage>
+  
+  
+   <ReportPage Name="Sert" Landscape="true" PaperWidth="297" PaperHeight="210">
+	
+    <DataBand Name="DataSert" Top="22.35" Width="1047.06" Height="18.9" CanGrow="true" CanShrink="true" DataSource="TableSert">
+		<ChildBand Name="Child3" Top="177.43" Width="1047.06" Height="45.36">
+		  <TableObject Name="TableHeaderSpec" Width="1043.28" Height="45.36" Border.Lines="All" Border.Width="0.3" GrowToBottom="true">
+			<TableColumn Name="ColumnHeadOp" Width="226.8"/>
+			<TableColumn Name="ColumnHeadSum" Width="102.06"/>
+			
+			<TableRow Name="RowHeaderSpec1" Height="45.36">
+			  <TableCell Name="CellHeadNu" Border.Lines="Right" Border.Width="0.3" Text="В том числе: &#13;&#10;НДС 20/120 %" HorzAlign="Left" VertAlign="Center" Font="Arial, 12pt, style=Bold"/>
+			  <TableCell Name="CellHeadArticle" Border.Lines="Right, Bottom" Border.Width="0.3" Text="" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt, style=Bold"/>
+			</TableRow>
+			<TableRow Name="RowHeaderSpec1" Height="45.36">
+			  <TableCell Name="CellHeadNu" Border.Lines="Right" Border.Width="0.3" Text="Сумма проданных сертификатов" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt"/>
+			  <TableCell Name="CellHeadArticle" Border.Lines="Right, Bottom" Border.Width="0.3" Text="[real20120]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt"/>
+			</TableRow>
+			<TableRow Name="RowHeaderSpecasd" Height="45.36">
+			  <TableCell Name="CellHeadNu" Border.Lines="Right" Border.Width="0.3" Text="НДС проданных сертификатов" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt"/>
+			  <TableCell Name="CellHeadArticle" Border.Lines="Right, Bottom" Border.Width="0.3" Text="[nds20120]" HorzAlign="Center" VertAlign="Center" Font="Arial, 8pt"/>
+			</TableRow>
+		  </TableObject>
+		</ChildBand>
+    </DataBand>
+  </ReportPage>
+</Report>
